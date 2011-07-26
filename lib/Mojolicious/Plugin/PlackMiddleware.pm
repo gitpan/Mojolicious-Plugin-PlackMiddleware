@@ -5,7 +5,7 @@ use Mojo::Base 'Mojolicious::Plugin';
 use Mojo::Server::PSGI;
 use Plack::Util;
 use Mojo::Message::Request;
-our $VERSION = '0.16';
+our $VERSION = '0.17';
 
     ### ---
     ### register
@@ -288,13 +288,13 @@ This is a utility method. This is for internal use.
 =head1 Example1
 
     $self->plugin(plack_middleware => [
-        'Auth::Basic' => sub {shift->req->url =~ qr{/path1/}}, {
+        'Auth::Basic' => sub {shift->req->url =~ qr{^/?path1/}}, {
             authenticator => sub {
                 my ($user, $pass) = @_;
                 return $username eq 'user1' && $password eq 'pass';
             }
         },
-        'Auth::Basic' => sub {shift->req->url =~ qr{/path2/}}, {
+        'Auth::Basic' => sub {shift->req->url =~ qr{^/?path2/}}, {
             authenticator => sub {
                 my ($user, $pass) = @_;
                 return $username eq 'user2' && $password eq 'pass2';

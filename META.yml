@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Mojolicious-Plugin-PlackMiddleware
-version:            0.16
+version:            0.17
 abstract:           Plack::Middleware inside Mojolicious
 author:
     - Sugama Keita <sugama@jamadam.com>
@@ -9,6 +9,7 @@ distribution_type:  module
 configure_requires:
     ExtUtils::MakeMaker:  0
 build_requires:
+    Mojolicious:          1.65
     Plack:                0.9944
     Test::Class:          0.36
     Test::More:           0.47
