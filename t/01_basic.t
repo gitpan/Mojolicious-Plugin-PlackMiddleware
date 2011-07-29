@@ -38,7 +38,6 @@ use utf8;
 			use strict;
 			use warnings;
 			use base 'Mojolicious';
-			use lib 't/lib';
 			
 			sub startup {
 				my $self = shift;
@@ -49,6 +48,60 @@ use utf8;
 				
 				$self->routes->route('/index')->to(cb => sub{
 					$_[0]->render_text('original');
+				});
+			}
+		}
+    
+    sub form_data : Test(3) {
+        $ENV{MOJO_MODE} = 'production';
+        my $t = Test::Mojo->new('FormData');
+		$t->post_form_ok('/index' => {a => 'b'});
+    }
+		{
+			package FormData;
+			use strict;
+			use warnings;
+			use base 'Mojolicious';
+			use Test::More;
+			
+			sub startup {
+				my $self = shift;
+				
+				$self->plugin('plack_middleware', [
+					'TestFilter'
+				]);
+				
+				$self->routes->route('/index')->to(cb => sub{
+					my $content_type = $_[0]->req->headers->header('content-type');
+					is($content_type, 'application/x-www-form-urlencoded', 'right content type');
+					is($_[0]->req->body, 'a=b', 'req body set');
+					$_[0]->render_text('original');
+				});
+			}
+		}
+    
+    sub req_modified : Test(8) {
+        $ENV{MOJO_MODE} = 'production';
+        my $t = Test::Mojo->new('ReqModified');
+        $t->get_ok('/index')
+			->status_is(200)
+			->content_is('ok');
+    }
+		{
+			package ReqModified;
+			use strict;
+			use warnings;
+			use base 'Mojolicious';
+			
+			sub startup {
+				my $self = shift;
+				
+				$self->plugin('plack_middleware', [
+					'TestFilter4'
+				]);
+				
+				$self->routes->route('/index.html')->to(cb => sub{
+					$_[0]->render_text('ok');
 				});
 			}
 		}
@@ -66,7 +119,6 @@ use utf8;
 			use strict;
 			use warnings;
 			use base 'Mojolicious';
-			use lib 't/lib';
 			
 			sub startup {
 				my $self = shift;
@@ -95,7 +147,6 @@ use utf8;
 			use strict;
 			use warnings;
 			use base 'Mojolicious';
-			use lib 't/lib';
 			
 			sub startup {
 				my $self = shift;
@@ -123,7 +174,6 @@ use utf8;
 			use strict;
 			use warnings;
 			use base 'Mojolicious';
-			use lib 't/lib';
 			
 			sub startup {
 				my $self = shift;
@@ -152,7 +202,6 @@ use utf8;
 			use strict;
 			use warnings;
 			use base 'Mojolicious';
-			use lib 't/lib';
 			
 			sub startup {
 				my $self = shift;
@@ -180,7 +229,6 @@ use utf8;
 			use strict;
 			use warnings;
 			use base 'Mojolicious';
-			use lib 't/lib';
 			
 			sub startup {
 				my $self = shift;
@@ -208,7 +256,6 @@ use utf8;
 			use strict;
 			use warnings;
 			use base 'Mojolicious';
-			use lib 't/lib';
 			use Scalar::Util;
 			use Test::More;
 			
@@ -249,7 +296,6 @@ use utf8;
 			use strict;
 			use warnings;
 			use base 'Mojolicious';
-			use lib 't/lib';
 			use Scalar::Util;
 			use Test::More;
 			
@@ -325,6 +371,19 @@ use utf8;
 		});
 	}
 	
+	package Plack::Middleware::TestFilter4;
+	use strict;
+	use warnings;
+	use base qw( Plack::Middleware );
+	
+	sub call {
+		
+		my ($self, $env) = @_;
+		$env->{PATH_INFO} .= '.html';
+		my $res = $self->app->($env);
+		return $res;
+	}
+	
 	package Plack::Middleware::GrowLargeFilter;
 	use strict;
 	use warnings;
@@ -378,54 +437,6 @@ use utf8;
 				$h->set('Content-Length', length $fixed_body);
 				return $res;
 			});
-		}
-	
-	package Plack::Middleware::Auth::Basic;
-	use strict;
-	use parent qw(Plack::Middleware);
-	use Plack::Util::Accessor qw( realm authenticator );
-	use Scalar::Util;
-	use MIME::Base64;
-		
-		sub prepare_app {
-			my $self = shift;
-		
-			my $auth = $self->authenticator or die 'authenticator is not set';
-			if (Scalar::Util::blessed($auth) && $auth->can('authenticate')) {
-				$self->authenticator(sub { $auth->authenticate(@_[0,1]) }); # because Authen::Simple barfs on 3 params
-			} elsif (ref $auth ne 'CODE') {
-				die 'authenticator should be a code reference or an object that responds to authenticate()';
-			}
-		}
-		
-		sub call {
-			my($self, $env) = @_;
-		
-			my $auth = $env->{HTTP_AUTHORIZATION}
-				or return $self->unauthorized;
-			
-			if ($auth =~ /^Basic (.*)$/) {
-				my($user, $pass) = split /:/, (MIME::Base64::decode($1) || ":");
-				$pass = '' unless defined $pass;
-				if ($self->authenticator->($user, $pass, $env)) {
-					$env->{REMOTE_USER} = $user;
-					return $self->app->($env);
-				}
-			}
-		
-			return $self->unauthorized;
-		}
-		
-		sub unauthorized {
-			my $self = shift;
-			my $body = 'Authorization required';
-			return [
-				401,
-				[ 'Content-Type' => 'text/plain',
-				  'Content-Length' => length $body,
-				  'WWW-Authenticate' => 'Basic realm="' . ($self->realm || "restricted area") . '"' ],
-				[ $body ],
-			];
 		}
 		
 		1;
