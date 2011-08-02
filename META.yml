@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Mojolicious-Plugin-PlackMiddleware
-version:            0.19
+version:            0.21
 abstract:           Plack::Middleware inside Mojolicious
 author:
     - Sugama Keita <sugama@jamadam.com>

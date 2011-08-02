@@ -2,10 +2,10 @@ package Mojolicious::Plugin::PlackMiddleware;
 use strict;
 use warnings;
 use Mojo::Base 'Mojolicious::Plugin';
-use Mojo::Server::PSGI;
 use Plack::Util;
 use Mojo::Message::Request;
-our $VERSION = '0.19';
+use Mojo::Message::Response;
+our $VERSION = '0.21';
 
     ### ---
     ### register
@@ -18,17 +18,30 @@ our $VERSION = '0.19';
         my $plack_app = sub {
             my $env = shift;
             my $c = $env->{'MOJO.CONTROLLER'};
-            $c->tx->req(psgi_env_to_mojo_req($env));
+            my $tx = $c->tx;
+            
+            ### reset stash & res for multiple on_process invoking
+            my $stash = $c->stash;
+            if ($stash->{'mojo.routed'}) {
+                for my $key (keys %{$stash}) {
+                    if ($key =~ qr{^mojo\.}) {
+                        delete $stash->{$key};
+                    }
+                }
+                delete $stash->{'status'};
+                $tx->res(Mojo::Message::Response->new);
+            }
+            
+            $tx->req(psgi_env_to_mojo_req($env));
             $on_process_org->($c->app, $c);
-            return mojo_res_to_psgi_res($c->res);
+            return mojo_res_to_psgi_res($tx->res);
         };
         
         my @mws = reverse @$mws;
         while (scalar @mws) {
             my $args = (ref $mws[0] eq 'HASH') ? shift @mws : undef;
             my $cond = (ref $mws[0] eq 'CODE') ? shift @mws : undef;
-            my $e = shift @mws;
-            $e = _load_class($e, 'Plack::Middleware');
+            my $e = _load_class(shift @mws, 'Plack::Middleware');
             $plack_app = Mojolicious::Plugin::PlackMiddleware::_Cond->wrap(
                 $plack_app,
                 condition => $cond,
@@ -37,7 +50,6 @@ our $VERSION = '0.19';
         }
         
         $app->on_process(sub {
-            
             my ($app, $c) = @_;
             my $plack_env = mojo_req_to_psgi_env($c->req);
             $plack_env->{'psgi.errors'} =
@@ -53,8 +65,14 @@ our $VERSION = '0.19';
         });
     }
     
+    ### ---
+    ### chunk size
+    ### ---
     use constant CHUNK_SIZE => $ENV{MOJO_CHUNK_SIZE} || 131072;
     
+    ### ---
+    ### convert psgi env to mojo req
+    ### ---
     sub psgi_env_to_mojo_req {
         
         my $env = shift;
@@ -82,9 +100,8 @@ our $VERSION = '0.19';
         my $mojo_req = shift;
         my $url = $mojo_req->url;
         my $base = $url->base;
-        my $host = $base->host;
-        my $length = length($mojo_req->body);
-        my $body = Mojolicious::Plugin::PlackMiddleware::PSGIInput->new($mojo_req->body);
+        my $body =
+        Mojolicious::Plugin::PlackMiddleware::_PSGIInput->new($mojo_req->body);
         
         my %headers = %{$mojo_req->headers->to_hash};
         for my $key (keys %headers) {
@@ -98,7 +115,7 @@ our $VERSION = '0.19';
             %ENV,
             %headers,
             'SERVER_PROTOCOL'   => 'HTTP/'. $mojo_req->version,
-            'SERVER_NAME'       => $host,
+            'SERVER_NAME'       => $base->host,
             'SERVER_PORT'       => $base->port,
             'REQUEST_METHOD'    => $mojo_req->method,
             'SCRIPT_NAME'       => '',
@@ -109,7 +126,6 @@ our $VERSION = '0.19';
             'psgi.multithread'  => Plack::Util::FALSE,
             'psgi.version'      => [1,1],
             'psgi.errors'       => *STDERR,
-            'CONTENT_LENGTH'    => $length,
             'psgi.input'        => $body,
             'psgi.multithread'  => Plack::Util::FALSE,
             'psgi.multiprocess' => Plack::Util::TRUE,
@@ -210,14 +226,17 @@ use parent qw(Plack::Middleware::Conditional);
     sub call {
         my($self, $env) = @_;
         my $cond = $self->condition;
-        if (! $cond || $cond->($env->{'MOJO.CONTROLLER'})) {
+        if (! $cond || $cond->($env->{'MOJO.CONTROLLER'}, $env)) {
             return $self->middleware->($env);
         } else {
             return $self->app->($env);
         }
     }
     
-package Mojolicious::Plugin::PlackMiddleware::PSGIInput;
+### ---
+### PSGI Input handler
+### ---
+package Mojolicious::Plugin::PlackMiddleware::_PSGIInput;
 use strict;
 use warnings;
     
@@ -297,7 +316,8 @@ middlewares. Each middleware can be followed by callback function for
 conditional activation, and attributes for middleware.
 
     my $condition = sub {
-        my $c = shift; # Mojolicious controller
+        my $c   = shift; # Mojolicious controller
+        my $env = shift; # PSGI env
         if (...) {
             return 1; # causes the middleware hooked
         }
@@ -338,7 +358,9 @@ This is a utility method. This is for internal use.
 
     my $psgi_res = mojo_res_to_psgi_res($mojo_res)
 
-=head1 Example1
+=head1 Example
+
+Plack::Middleware::Auth::Basic
 
     $self->plugin(plack_middleware => [
         'Auth::Basic' => sub {shift->req->url =~ qr{^/?path1/}}, {
@@ -353,6 +375,28 @@ This is a utility method. This is for internal use.
                 return $username eq 'user2' && $password eq 'pass2';
             }
         },
+    ]);
+
+Plack::Middleware::ErrorDocument
+
+    $self->plugin('plack_middleware', [
+        ErrorDocument => {
+            500 => "$FindBin::Bin/errors/500.html"
+        },
+        ErrorDocument => {
+            404 => "/errors/404.html",
+            subrequest => 1,
+        },
+        Static => {
+            path => qr{^/errors},
+            root => $FindBin::Bin
+        },
+    ]);
+
+Plack::Middleware::JSONP
+
+    $self->plugin('plack_middleware', [
+        JSONP => {callback_key => 'json.p'},
     ]);
 
 =head1 AUTHOR

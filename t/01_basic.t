@@ -6,7 +6,11 @@ use Test::More;
 use Test::Mojo;
 use utf8;
 
-    my $backup = $ENV{MOJO_MODE} || '';
+	BEGIN {
+		$ENV{MOJO_NO_BONJOUR} = $ENV{MOJO_NO_IPV6} = 1;
+		$ENV{MOJO_IOWATCHER}  = 'Mojo::IOWatcher';
+		$ENV{MOJO_MODE}       = 'development';
+	}
     
     __PACKAGE__->runtests;
     
@@ -48,6 +52,35 @@ use utf8;
 				
 				$self->routes->route('/index')->to(cb => sub{
 					$_[0]->render_text('original');
+				});
+			}
+		}
+    
+    sub on_process_twice : Test(3) {
+        $ENV{MOJO_MODE} = 'production';
+        my $t = Test::Mojo->new('OnProcessTwice');
+        $t->get_ok('/index1')
+			->status_is(200)
+			->content_is('index2');
+    }
+		{
+			package OnProcessTwice;
+			use strict;
+			use warnings;
+			use base 'Mojolicious';
+			
+			sub startup {
+				my $self = shift;
+				
+				$self->plugin('plack_middleware', [
+					'InvokeAppTwice'
+				]);
+				
+				$self->routes->route('/index1')->to(cb => sub{
+					$_[0]->render_not_found;
+				});
+				$self->routes->route('/index2')->to(cb => sub{
+					$_[0]->render_text('index2');
 				});
 			}
 		}
@@ -310,10 +343,6 @@ use utf8;
 			}
 		}
 	
-    END {
-        $ENV{MOJO_MODE} = $backup;
-    }
-	
 	package Plack::Middleware::TestFilter;
 	use strict;
 	use warnings;
@@ -438,7 +467,23 @@ use utf8;
 				return $res;
 			});
 		}
+	
+	package Plack::Middleware::InvokeAppTwice;
+	use strict;
+	use warnings;
+	use base qw( Plack::Middleware );
+	
+	sub call {
 		
-		1;
+		my ($self, $env) = @_;
+		my $res = $self->app->($env);
+		if ($res->[0] == 404) {
+			local $env->{PATH_INFO} = 'index2';
+			$res = $self->app->($env);
+		}
+		return $res;
+	}
+
+1;
 
 __END__
