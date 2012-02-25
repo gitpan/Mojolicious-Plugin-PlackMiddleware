@@ -12,10 +12,9 @@ my %params = (
     },
     BUILD_REQUIRES => {
         'Test::More'          	=> '0.47',
-		'Test::Class' 			=> '0.36',
         'Test::UseAllModules' 	=> '0.10',
-        'Plack' 				=> '0.9944',
-        'Mojolicious'    	  	=> '1.65',
+        'Plack' 				=> '0.9945',
+        'Mojolicious'    	  	=> '2.52',
     },
     META_MERGE => {
         resources => {

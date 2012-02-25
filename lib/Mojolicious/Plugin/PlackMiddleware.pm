@@ -5,42 +5,41 @@ use Mojo::Base 'Mojolicious::Plugin';
 use Plack::Util;
 use Mojo::Message::Request;
 use Mojo::Message::Response;
-our $VERSION = '0.22';
+our $VERSION = '0.23';
     
-    ### ---
-    ### controller
-    ### ---
-    our $C;
-
     ### ---
     ### register
     ### ---
     sub register {
         my ($self, $app, $mws) = @_;
         
-        my $on_process_org = $app->on_process;
+        my $inside_app;
         
         my $plack_app = sub {
             my $env = shift;
-            my $tx = $C->tx;
-            
-            ### reset stash & res for multiple on_process invoking
-            my $stash = $C->stash;
-            if ($stash->{'mojo.routed'}) {
-                for my $key (keys %{$stash}) {
-                    if ($key =~ qr{^mojo\.}) {
-                        delete $stash->{$key};
-                    }
-                }
-                delete $stash->{'status'};
-                $tx->res(Mojo::Message::Response->new);
-            }
+            my $c = $env->{'mojo.c'};
+            my $tx = $c->tx;
             
             $tx->req(psgi_env_to_mojo_req($env));
-            $on_process_org->($C->app, $C);
+            
+            if ($env->{'mojo.routed'}) {
+                my $stash = $c->stash;
+                for my $key (grep {$_ =~ qr{^mojo\.}} keys %{$stash}) {
+                    delete $stash->{$key};
+                }
+                delete $stash->{'status'};
+                my $sever = $tx->res->headers->header('server');
+                $tx->res(Mojo::Message::Response->new);
+                $tx->res->headers->header('server', $sever);
+                $inside_app->();
+            } else {
+                $inside_app->();
+                $env->{'mojo.routed'} = 1;
+            }
+            
             return mojo_res_to_psgi_res($tx->res);
         };
-        
+            
         my @mws = reverse @$mws;
         while (scalar @mws) {
             my $args = (ref $mws[0] eq 'HASH') ? shift @mws : undef;
@@ -53,17 +52,27 @@ our $VERSION = '0.22';
             );
         }
         
-        $app->on_process(sub {
-            (my $app, local $C) = @_;
-            my $plack_env = mojo_req_to_psgi_env($C->req);
+        $app->hook('around_dispatch' => sub {
+            ($inside_app, my $c) = @_;
+            
+            if ($c->tx->req->error) {
+                $inside_app->();
+                return;
+            }
+            
+            my $plack_env = mojo_req_to_psgi_env($c->req);
+            
+            $plack_env->{'mojo.c'} = $c;
+            
             $plack_env->{'psgi.errors'} =
                 Mojolicious::Plugin::PlackMiddleware::_EH->new(sub {
-                    $app->log->debug(shift);
+                    $c->app->log->debug(shift);
                 });
-            $C->tx->res(psgi_res_to_mojo_res($plack_app->($plack_env)));
             
-            if (! $C->stash('mojo.routed')) {
-                $C->rendered;
+            $c->tx->res(psgi_res_to_mojo_res($plack_app->($plack_env)));
+            
+            if (! $plack_env->{'mojo.routed'}) {
+                $c->rendered;
             }
         });
     }
@@ -83,7 +92,7 @@ our $VERSION = '0.22';
         
         # Request body
         my $len = $env->{CONTENT_LENGTH};
-        while (!$req->is_done) {
+        while (!$req->is_finished) {
             my $chunk = ($len && $len < CHUNK_SIZE) ? $len : CHUNK_SIZE;
             my $read = $env->{'psgi.input'}->read(my $buffer, $chunk, 0);
             last unless $read;
@@ -165,9 +174,7 @@ our $VERSION = '0.22';
         my $headers = $mojo_res->content->headers;
         my @headers;
         for my $name (@{$headers->names}) {
-            for my $values ($headers->header($name)) {
-                push @headers, $name => $_ for @$values;
-            }
+            push @headers, $name => join ', ', map {join ', ', @$_} $headers->header($name);
         }
         my @body;
         my $offset = 0;
@@ -228,7 +235,7 @@ use parent qw(Plack::Middleware::Conditional);
     sub call {
         my($self, $env) = @_;
         my $cond = $self->condition;
-        if (! $cond || $cond->($Mojolicious::Plugin::PlackMiddleware::C, $env)) {
+        if (! $cond || $cond->($env->{'mojo.c'}, $env)) {
             return $self->middleware->($env);
         } else {
             return $self->app->($env);
@@ -244,14 +251,17 @@ use warnings;
     
     sub new {
         my ($class, $content) = @_;
-        return bless [$content, 0], $class;
+        return bless [$content, 0, length($content)], $class;
     }
     
     sub read {
         my $self = shift;
-        if ($_[0] = substr($self->[0], $self->[1], $_[1])) {
-            $self->[1] += $_[1];
-            return 1;
+        my $offset = ($_[2] || $self->[1]);
+        if ($offset <= $self->[2]) {
+            if ($_[0] = substr($self->[0], $offset, $_[1])) {
+                $self->[1] = $offset + length($_[0]);
+                return 1;
+            }
         }
     }
 
@@ -268,14 +278,13 @@ Mojolicious::Plugin::PlackMiddleware - Plack::Middleware inside Mojolicious
     # Mojolicious
     
     sub startup {
-        
         my $self = shift;
         
         $self->plugin(plack_middleware => [
             'MyMiddleware1', 
             'MyMiddleware2', {arg1 => 'some_vale'},
-            'MyMiddleware3', sub {$condition}, 
-            'MyMiddleware4', sub {$condition}, {arg1 => 'some_vale'}
+            'MyMiddleware3', $condition_code_ref, 
+            'MyMiddleware4', $condition_code_ref, {arg1 => 'some_value'}
         ]);
     }
     
@@ -284,8 +293,8 @@ Mojolicious::Plugin::PlackMiddleware - Plack::Middleware inside Mojolicious
     plugin plack_middleware => [
         'MyMiddleware1', 
         'MyMiddleware2', {arg1 => 'some_vale'},
-        'MyMiddleware3', sub {$condition}, 
-        'MyMiddleware4', sub {$condition}, {arg1 => 'some_vale'}
+        'MyMiddleware3', $condition_code_ref, 
+        'MyMiddleware4', $condition_code_ref, {arg1 => 'some_value'}
     ];
     
     package Plack::Middleware::MyMiddleware1;
@@ -295,17 +304,21 @@ Mojolicious::Plugin::PlackMiddleware - Plack::Middleware inside Mojolicious
     
     sub call {
         my($self, $env) = @_;
+        
         # pre-processing $env
+        
         my $res = $self->app->($env);
+        
         # post-processing $res
+        
         return $res;
     }
   
 =head1 DESCRIPTION
 
 Mojolicious::Plugin::PlackMiddleware allows you to enable Plack::Middleware
-inside Mojolicious by wrapping on_proccess so that the portability of your app
-covers pre/post process too.
+inside Mojolicious using around_dispatch hook so that the portability of your
+app covers pre/post process too.
 
 It also aimed at those who used to Mojolicious bundle servers.
 Note that if you can run your application on a plack server, there is proper
@@ -325,7 +338,7 @@ conditional activation, and attributes for middleware.
         }
     };
     plugin plack_middleware => [
-        Plack::Middleware::MyMiddleware, $condition, {arg1 => 'some_vale'},
+        Plack::Middleware::MyMiddleware, $condition, {arg1 => 'some_value'},
     ];
 
 =head1 METHODS
@@ -368,13 +381,13 @@ Plack::Middleware::Auth::Basic
         'Auth::Basic' => sub {shift->req->url =~ qr{^/?path1/}}, {
             authenticator => sub {
                 my ($user, $pass) = @_;
-                return $username eq 'user1' && $password eq 'pass';
+                return $user eq 'user1' && $pass eq 'pass';
             }
         },
         'Auth::Basic' => sub {shift->req->url =~ qr{^/?path2/}}, {
             authenticator => sub {
                 my ($user, $pass) = @_;
-                return $username eq 'user2' && $password eq 'pass2';
+                return $user eq 'user2' && $pass eq 'pass2';
             }
         },
     ]);
