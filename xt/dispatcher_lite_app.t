@@ -1,19 +1,32 @@
 use Mojo::Base -strict;
 
-# Disable Bonjour, IPv6 and libev
+# Disable IPv6 and libev
 BEGIN {
-  $ENV{MOJO_NO_BONJOUR} = $ENV{MOJO_NO_IPV6} = 1;
-  $ENV{MOJO_IOWATCHER} = 'Mojo::IOWatcher';
+  $ENV{MOJO_NO_IPV6} = 1;
+  $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll';
 }
 
-use Test::More tests => 15;
+use Test::More tests => 24;
 
 # "Just once I'd like to eat dinner with a celebrity who isn't bound and
 #  gagged."
+use Mojo::Message::Response;
 use Mojolicious::Lite;
 use Test::Mojo;
 
 plugin plack_middleware => [];
+
+# Internal redirect
+hook around_dispatch => sub {
+  my ($next, $self) = @_;
+  $next->();
+  if ($self->res->code == 404) {
+    $self->req->url->path($self->param('wrap') ? '/wrap/again' : '/');
+    delete $self->stash->{$_} for keys %{$self->stash};
+    $self->tx->res(Mojo::Message::Response->new);
+    $next->();
+  }
+};
 
 # Wrap whole application
 hook around_dispatch => sub {
@@ -31,7 +44,14 @@ hook around_dispatch => sub {
   $next->();
 };
 
-# Custom dispatchers /custom
+# Custom dispatcher /hello.txt
+hook before_dispatch => sub {
+  my $self = shift;
+  $self->render_text('Custom static file works!')
+    if $self->req->url->path->contains('/hello.txt');
+};
+
+# Custom dispatcher /custom
 hook before_dispatch => sub {
   my $self = shift;
   $self->render_text($self->param('a'), status => 205)
@@ -56,14 +76,24 @@ my $t = Test::Mojo->new;
 # GET /
 $t->get_ok('/')->status_is(200)->content_is('works');
 
+# GET /hello.txt (override static file)
+$t->get_ok('/hello.txt')->status_is(200)
+  ->content_is('Custom static file works!');
+
 # GET /custom
 $t->get_ok('/custom?a=works+too')->status_is(205)->content_is('works too');
 
 # GET /custom_too
 $t->get_ok('/custom_too')->status_is(200)->content_is('this works too');
 
-# GET /wrap
+# GET /wrap (first wrapper)
 $t->get_ok('/wrap')->status_is(200)->content_is('Wrapped!');
 
-# GET /wrap/again
+# GET /wrap/again (second wrapper)
 $t->get_ok('/wrap/again')->status_is(200)->content_is('Wrapped again!');
+
+# GET /not_found (internal redirect to root)
+$t->get_ok('/not_found')->status_is(200)->content_is('works');
+
+# GET /not_found (internal redirect to second wrapper)
+$t->get_ok('/not_found?wrap=1')->status_is(200)->content_is('Wrapped again!');

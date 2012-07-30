@@ -22,7 +22,7 @@
    "prereqs" : {
       "build" : {
          "requires" : {
-            "Mojolicious" : "2.52",
+            "Mojolicious" : "3.00",
             "Plack" : "0.9945",
             "Test::More" : "0.47",
             "Test::UseAllModules" : "0.10"
@@ -39,5 +39,5 @@
    },
    "release_status" : "stable",
    "resources" : {},
-   "version" : "0.23"
+   "version" : "0.24"
 }

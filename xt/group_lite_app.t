@@ -2,16 +2,17 @@ use Mojo::Base -strict;
 
 use utf8;
 
-# Disable Bonjour, IPv6 and libev
+# Disable IPv6 and libev
 BEGIN {
-  $ENV{MOJO_NO_BONJOUR} = $ENV{MOJO_NO_IPV6} = 1;
-  $ENV{MOJO_IOWATCHER} = 'Mojo::IOWatcher';
+  $ENV{MOJO_NO_IPV6} = 1;
+  $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll';
 }
 
-use Test::More tests => 154;
+use Test::More tests => 201;
 
 # "Let's see how crazy I am now, Nixon. The correct answer is very."
 use Mojo::ByteStream 'b';
+use Mojo::UserAgent::CookieJar;
 use Mojolicious::Lite;
 use Test::Mojo;
 
@@ -179,27 +180,43 @@ group {
 # GET /noauthgroup
 get '/noauthgroup' => {inline => 'Whatever <%= $foo %>.'};
 
+# Disable format detection
+under [format => 0];
+
+# GET /no_format
+get '/no_format' => {text => 'No format detection.'};
+
+# GET /some_formats.txt
+# GET /some_formats.html
+get '/some_formats' => [format => [qw(txt json)]] =>
+  {text => 'Some format detection.'};
+
+# GET /no_real_format.xml
+get '/no_real_format.xml' => {text => 'No real format.'};
+
+# GET /one_format.xml
+get '/one_format' => [format => 'xml'] => {text => 'One format.'};
+
 my $t = Test::Mojo->new;
 
 # GET /with_under
 $t->get_ok('/with_under', {'X-Bender' => 'Rodriguez'})->status_is(200)
   ->header_is(Server         => 'Mojolicious (Perl)')
   ->header_is('X-Powered-By' => 'Mojolicious (Perl)')
-  ->header_is('X-Under' => '23, 24')->header_like('X-Under' => qr/23, 24/)
+  ->header_is('X-Under'      => '23, 24')->header_like('X-Under' => qr/23, 24/)
   ->content_is('Unders are cool!');
 
 # GET /with_under_too
 $t->get_ok('/with_under_too', {'X-Bender' => 'Rodriguez'})->status_is(200)
   ->header_is(Server         => 'Mojolicious (Perl)')
   ->header_is('X-Powered-By' => 'Mojolicious (Perl)')
-  ->header_is('X-Under' => '23, 24')->header_like('X-Under' => qr/23, 24/)
+  ->header_is('X-Under'      => '23, 24')->header_like('X-Under' => qr/23, 24/)
   ->content_is('Unders are cool too!');
 
 # GET /with_under_too
 $t->get_ok('/with_under_too')->status_is(404)
   ->header_is(Server         => 'Mojolicious (Perl)')
-  ->header_is('X-Powered-By' => 'Mojolicious (Perl)')
-  ->content_like(qr/Oops!/);
+  ->header_is('X-Powered-By' => 'Mojolicious (Perl)')->content_like(qr/Oops!/);
 
 # GET /param_auth
 $t->get_ok('/param_auth')->status_is(200)
@@ -210,8 +227,7 @@ $t->get_ok('/param_auth')->status_is(200)
 # GET /param_auth?name=Bender
 $t->get_ok('/param_auth?name=Bender')->status_is(200)
   ->header_is(Server         => 'Mojolicious (Perl)')
-  ->header_is('X-Powered-By' => 'Mojolicious (Perl)')
-  ->content_is("Bender!\n");
+  ->header_is('X-Powered-By' => 'Mojolicious (Perl)')->content_is("Bender!\n");
 
 # GET /param_auth/too
 $t->get_ok('/param_auth/too')->status_is(200)
@@ -239,13 +255,21 @@ ok $t->tx->res->cookie('mojolicious')->httponly,
 # GET /bridge2stash (broken session cookie)
 $t->reset_session;
 my $session = b("☃☃☃☃☃")->encode->b64_encode('');
-my $hmac    = $session->clone->hmac_md5_sum($t->app->secret);
-my $broken  = "\$Version=1; mojolicious=$session--$hmac; \$Path=/";
-$t->get_ok('/bridge2stash' => {Cookie => $broken})->status_is(200)
+my $hmac    = $session->clone->hmac_sha1_sum($t->app->secret);
+$t->get_ok('/bridge2stash' => {Cookie => "mojolicious=$session--$hmac"})
+  ->status_is(200)->content_is("stash too!!!!!!!\n");
+
+# GET /bridge2stash (without cookie jar)
+$t->ua->cookie_jar(0);
+$t->get_ok('/bridge2stash' => {'X-Flash' => 1})->status_is(200)
   ->content_is("stash too!!!!!!!\n");
 
+# GET /bridge2stash (again without cookie jar)
+$t->get_ok('/bridge2stash' => {'X-Flash' => 1})->status_is(200)
+  ->content_is("stash too!!!!!!!\n");
+$t->reset_session->ua->cookie_jar(Mojo::UserAgent::CookieJar->new);
+
 # GET /bridge2stash (fresh start)
-$t->reset_session;
 $t->get_ok('/bridge2stash' => {'X-Flash' => 1})->status_is(200)
   ->content_is("stash too!!!!!!!\n");
 
@@ -368,6 +392,55 @@ $t->get_ok('/authgroup')->status_is(200)->content_is("You're not ok.");
 
 # GET /noauthgroup
 $t->get_ok('/noauthgroup')->status_is(200)->content_is("Whatever one.\n");
+
+# GET /no_format
+$t->get_ok('/no_format')->status_is(200)
+  ->content_type_is('text/html;charset=UTF-8')
+  ->content_is('No format detection.');
+
+# GET /no_format.txt
+$t->get_ok('/no_format.txt')->status_is(404)
+  ->content_type_is('text/html;charset=UTF-8');
+
+# GET /some_formats
+$t->get_ok('/some_formats')->status_is(404)
+  ->content_type_is('text/html;charset=UTF-8');
+
+# GET /some_formats.txt
+$t->get_ok('/some_formats.txt')->status_is(200)->content_type_is('text/plain')
+  ->content_is('Some format detection.');
+
+# GET /some_formats.json
+$t->get_ok('/some_formats.json')->status_is(200)
+  ->content_type_is('application/json')->content_is('Some format detection.');
+
+# GET /some_formats.xml
+$t->get_ok('/some_formats.xml')->status_is(404)
+  ->content_type_is('text/html;charset=UTF-8');
+
+# GET /no_real_format
+$t->get_ok('/no_real_format')->status_is(404)
+  ->content_type_is('text/html;charset=UTF-8');
+
+# GET /no_real_format.xml
+$t->get_ok('/no_real_format.xml')->status_is(200)
+  ->content_type_is('text/html;charset=UTF-8')->content_is('No real format.');
+
+# GET /no_real_format.txt
+$t->get_ok('/no_real_format.txt')->status_is(404)
+  ->content_type_is('text/html;charset=UTF-8');
+
+# GET /one_format
+$t->get_ok('/one_format')->status_is(404)
+  ->content_type_is('text/html;charset=UTF-8');
+
+# GET /one_format.xml
+$t->get_ok('/one_format.xml')->status_is(200)->content_type_is('text/xml')
+  ->content_is('One format.');
+
+# GET /one_format.txt
+$t->get_ok('/one_format.txt')->status_is(404)
+  ->content_type_is('text/html;charset=UTF-8');
 
 __DATA__
 @@ not_found.html.epl
