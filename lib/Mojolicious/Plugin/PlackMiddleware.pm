@@ -5,7 +5,7 @@ use Mojo::Base 'Mojolicious::Plugin';
 use Plack::Util;
 use Mojo::Message::Request;
 use Mojo::Message::Response;
-our $VERSION = '0.24';
+our $VERSION = '0.28';
     
     ### ---
     ### register
@@ -62,9 +62,9 @@ our $VERSION = '0.24';
             
             my $plack_env = mojo_req_to_psgi_env($c->req);
             
-            $plack_env->{'mojo.c'} = $c;
+            local $plack_env->{'mojo.c'} = $c;
             
-            $plack_env->{'psgi.errors'} =
+            local $plack_env->{'psgi.errors'} =
                 Mojolicious::Plugin::PlackMiddleware::_EH->new(sub {
                     $c->app->log->debug(shift);
                 });
@@ -119,14 +119,14 @@ our $VERSION = '0.24';
         for my $key (keys %headers) {
            my $value = $headers{$key};
            delete $headers{$key};
-           $key =~ s{-}{_};
+           $key =~ s{-}{_}g;
            $headers{'HTTP_'. uc $key} = $value;
         }
         
         return {
             %ENV,
             %headers,
-            'SERVER_PROTOCOL'   => 'HTTP/'. $mojo_req->version,
+            'SERVER_PROTOCOL'   => $base->protocol. '/'. $mojo_req->version,
             'SERVER_NAME'       => $base->host,
             'SERVER_PORT'       => $base->port,
             'REQUEST_METHOD'    => $mojo_req->method,
@@ -178,7 +178,7 @@ our $VERSION = '0.24';
         }
         my @body;
         my $offset = 0;
-        while (my $chunk = $mojo_res->get_body_chunk($offset)) {
+        while (length(my $chunk = $mojo_res->get_body_chunk($offset))) {
             push(@body, $chunk);
             $offset += length $chunk;
         }

@@ -1,15 +1,11 @@
 use Mojo::Base -strict;
 
-# Disable IPv6 and libev
 BEGIN {
   $ENV{MOJO_NO_IPV6} = 1;
   $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll';
 }
 
-use Test::More tests => 24;
-
-# "Just once I'd like to eat dinner with a celebrity who isn't bound and
-#  gagged."
+use Test::More;
 use Mojo::Message::Response;
 use Mojolicious::Lite;
 use Test::Mojo;
@@ -47,53 +43,120 @@ hook around_dispatch => sub {
 # Custom dispatcher /hello.txt
 hook before_dispatch => sub {
   my $self = shift;
-  $self->render_text('Custom static file works!')
+  $self->render(text => 'Custom static file works!')
     if $self->req->url->path->contains('/hello.txt');
 };
 
 # Custom dispatcher /custom
 hook before_dispatch => sub {
   my $self = shift;
-  $self->render_text($self->param('a'), status => 205)
+  $self->render(text => $self->param('a'), status => 205)
     if $self->req->url->path->contains('/custom');
 };
 
 # Custom dispatcher /custom_too
-hook after_static_dispatch => sub {
+hook before_routes => sub {
   my $self = shift;
-  $self->render_text('this works too')
+  $self->render(text => 'this works too')
     if $self->req->url->path->contains('/custom_too');
 };
 
-# GET /
-get '/' => sub { shift->render_text('works') };
+# Cleared response for /res.txt
+hook before_routes => sub {
+  my $self = shift;
+  return
+    unless $self->req->url->path->contains('/res.txt')
+    && $self->param('route');
+  $self->tx->res(Mojo::Message::Response->new);
+};
 
-# GET /custom (never called if custom dispatchers work)
-get '/custom' => sub { shift->render_text('does not work') };
+# Set additional headers for static files
+hook after_static => sub {
+  my $self = shift;
+  $self->res->headers->cache_control('max-age=3600, must-revalidate');
+};
+
+# Response generating condition "res" for /res.txt
+app->routes->add_condition(
+  res => sub {
+    my ($route, $c) = @_;
+    return 1 unless $c->param('res');
+    $c->tx->res(
+      Mojo::Message::Response->new(code => 201)->body('Conditional response!')
+    );
+    $c->rendered and return undef;
+  }
+);
+
+get '/' => sub { shift->render(text => 'works') };
+
+# Never called if custom dispatchers work
+get '/custom' => sub { shift->render(text => 'does not work') };
+
+# Custom response
+get '/res.txt' => (res => 1) => sub {
+  my $self = shift;
+  my $res
+    = Mojo::Message::Response->new(code => 202)->body('Custom response!');
+  $self->tx->res($res);
+  $self->rendered;
+};
 
 my $t = Test::Mojo->new;
 
-# GET /
-$t->get_ok('/')->status_is(200)->content_is('works');
+# Normal route
+$t->get_ok('/')->status_is(200)
+  ->header_isnt('Cache-Control' => 'max-age=3600, must-revalidate')
+  ->content_is('works');
 
-# GET /hello.txt (override static file)
+# Normal static file
+$t->get_ok('/test.txt')->status_is(200)
+  ->header_is('Cache-Control' => 'max-age=3600, must-revalidate')
+  ->content_is("Normal static file!\n");
+
+# Override static file
 $t->get_ok('/hello.txt')->status_is(200)
   ->content_is('Custom static file works!');
 
-# GET /custom
+# Custom dispatcher
 $t->get_ok('/custom?a=works+too')->status_is(205)->content_is('works too');
 
-# GET /custom_too
-$t->get_ok('/custom_too')->status_is(200)->content_is('this works too');
+# Static file
+$t->get_ok('/res.txt')->status_is(200)
+  ->header_is('Cache-Control' => 'max-age=3600, must-revalidate')
+  ->content_is("Static response!\n");
 
-# GET /wrap (first wrapper)
+# Custom response
+$t->get_ok('/res.txt?route=1')->status_is(202)
+  ->header_isnt('Cache-Control' => 'max-age=3600, must-revalidate')
+  ->content_is('Custom response!');
+
+# Conditional response
+$t->get_ok('/res.txt?route=1&res=1')->status_is(201)
+  ->header_isnt('Cache-Control' => 'max-age=3600, must-revalidate')
+  ->content_is('Conditional response!');
+
+# Another custom dispatcher
+$t->get_ok('/custom_too')->status_is(200)
+  ->header_isnt('Cache-Control' => 'max-age=3600, must-revalidate')
+  ->content_is('this works too');
+
+# First wrapper
 $t->get_ok('/wrap')->status_is(200)->content_is('Wrapped!');
 
-# GET /wrap/again (second wrapper)
+# Second wrapper
 $t->get_ok('/wrap/again')->status_is(200)->content_is('Wrapped again!');
 
-# GET /not_found (internal redirect to root)
+# Internal redirect to root
 $t->get_ok('/not_found')->status_is(200)->content_is('works');
 
-# GET /not_found (internal redirect to second wrapper)
+# Internal redirect to second wrapper
 $t->get_ok('/not_found?wrap=1')->status_is(200)->content_is('Wrapped again!');
+
+done_testing();
+
+__DATA__
+@@ res.txt
+Static response!
+@@ test.txt
+Normal static file!
