@@ -18,9 +18,9 @@ no_index:
     - t
     - inc
 requires:
-  Mojolicious: 4.90
+  Mojolicious: 5.02
   Plack: 0.9945
   Test::More: 0.47
   Test::UseAllModules: 0.10
 resources: {}
-version: 0.30
+version: 0.31
