@@ -16,13 +16,16 @@
    "no_index" : {
       "directory" : [
          "t",
-         "inc"
+         "inc",
+         "t",
+         "xt"
       ]
    },
    "prereqs" : {
       "build" : {
          "requires" : {
-            "ExtUtils::MakeMaker" : "0"
+            "Test::More" : "0.47",
+            "Test::UseAllModules" : "0.10"
          }
       },
       "configure" : {
@@ -41,5 +44,5 @@
    },
    "release_status" : "stable",
    "resources" : {},
-   "version" : "0.31"
+   "version" : "0.32"
 }

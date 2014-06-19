@@ -3,7 +3,8 @@ abstract: 'Plack::Middleware inside Mojolicious'
 author:
   - 'Sugama Keita <sugama@jamadam.com>'
 build_requires:
-  ExtUtils::MakeMaker: 0
+  Test::More: 0.47
+  Test::UseAllModules: 0.10
 configure_requires:
   ExtUtils::MakeMaker: 0
 dynamic_config: 1
@@ -17,10 +18,12 @@ no_index:
   directory:
     - t
     - inc
+    - t
+    - xt
 requires:
   Mojolicious: 5.02
   Plack: 0.9945
   Test::More: 0.47
   Test::UseAllModules: 0.10
 resources: {}
-version: 0.31
+version: 0.32
